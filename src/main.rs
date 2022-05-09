@@ -45,8 +45,8 @@ async fn handle_client(opt: &Opt, i: usize, mut incoming_stream: TcpStream) -> i
     let mut outgoing_stream = SslStream::new(ssl, outgoing_stream).unwrap();
     Pin::new(&mut outgoing_stream).connect().await.unwrap();
 
-    let mut incoming_buf = vec![0; 1024 * 1024];
-    let mut outgoing_buf = vec![0; 1024 * 1024];
+    let mut incoming_buf = vec![0; 1 << 16];
+    let mut outgoing_buf = vec![0; 1 << 16];
     loop {
         tokio::select! {
             n = incoming_stream.read(&mut incoming_buf) => {
