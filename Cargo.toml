@@ -10,3 +10,5 @@ tokio = { version = "1", features = ["full"] }
 tokio-openssl = "*"
 openssl = "*"
 structopt = "*"
+httparse = "*"
+anyhow = "*"

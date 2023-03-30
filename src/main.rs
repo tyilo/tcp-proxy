@@ -1,8 +1,12 @@
+use anyhow::Result;
+use httparse::Error::TooManyHeaders;
+use httparse::Status::{Complete, Partial};
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use std::io;
+use std::io::Write;
 use std::pin::Pin;
 use structopt::StructOpt;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_openssl::SslStream;
 
@@ -10,27 +14,139 @@ async fn handle_read<W: AsyncWriteExt + std::marker::Unpin>(
     opt: &Opt,
     i: usize,
     arrow: &str,
-    read_res: io::Result<usize>,
-    buf: &[u8],
+    data_read: &[u8],
     dst: &mut W,
-) -> io::Result<usize> {
-    let n = read_res?;
-    if n > 0 {
-        let data_read = &buf[..n];
+) -> io::Result<()> {
+    let n = data_read.len();
+    if !data_read.is_empty() {
         println!("[{}] {} {} bytes", i, arrow, n);
-        if opt.data {
+        if opt.show_data {
             println!("{}", String::from_utf8_lossy(data_read));
         }
         dst.write_all(data_read).await?;
     };
 
-    Ok(n)
+    Ok(())
 }
 
-async fn handle_client(opt: &Opt, i: usize, mut incoming_stream: TcpStream) -> io::Result<()> {
-    println!("[{}] === Handling connection ===", i);
-    println!();
+struct RequestLine<'a> {
+    method: &'a str,
+    path: &'a str,
+    version: u8,
+}
 
+impl<'a> RequestLine<'a> {
+    fn new<'b>(request: httparse::Request<'b, 'a>) -> Self {
+        Self {
+            method: request.method.unwrap(),
+            path: request.path.unwrap(),
+            version: request.version.unwrap(),
+        }
+    }
+}
+
+struct RequestHeaders<'a> {
+    request_line: RequestLine<'a>,
+    headers: Vec<httparse::Header<'a>>,
+}
+
+impl<'a> RequestHeaders<'a> {
+    fn new(request_line: RequestLine<'a>, mut headers: Vec<httparse::Header<'a>>) -> Self {
+        while headers.last().map(|h| h.name.is_empty()).unwrap_or(false) {
+            headers.pop();
+        }
+
+        Self {
+            request_line,
+            headers,
+        }
+    }
+}
+
+fn parse_http_request_headers(
+    buffer: &[u8],
+    max_headers: usize,
+) -> Result<Option<(usize, RequestHeaders)>> {
+    let mut headers = vec![httparse::EMPTY_HEADER; max_headers];
+    let mut request = httparse::Request::new(&mut headers);
+    match request.parse(buffer) {
+        Ok(Complete(n)) => {
+            let request_line = RequestLine::new(request);
+            let request_headers = RequestHeaders::new(request_line, headers);
+            Ok(Some((n, request_headers)))
+        }
+        Ok(Partial) => Ok(None),
+        Err(TooManyHeaders) => parse_http_request_headers(buffer, max_headers * 2),
+        Err(e) => Err(e.into()),
+    }
+}
+
+async fn handle_http(
+    opt: &Opt,
+    i: usize,
+    incoming_stream: &mut TcpStream,
+    outgoing_stream: &mut AsyncStream,
+) -> Result<()> {
+    let mut request_buf = vec![];
+    let (header_size, mut headers) = loop {
+        let n = incoming_stream.read_buf(&mut request_buf).await?;
+        println!("[{}] ==> {} bytes", i, n);
+
+        let headers = parse_http_request_headers(&request_buf, 16)?;
+        if let Some((header_size, headers)) = headers {
+            break (header_size, headers);
+        }
+    };
+
+    println!("[{}] ==> HTTP header read", i);
+
+    let mut headers_changed = false;
+    for header in headers.headers.iter_mut() {
+        if header.name.to_ascii_lowercase() == "host" {
+            println!(
+                "[{}] Rewrote host header from {} to {}",
+                i,
+                String::from_utf8_lossy(header.value),
+                opt.hostname
+            );
+            header.value = opt.hostname.as_bytes();
+            headers_changed = true;
+        }
+    }
+
+    if headers_changed {
+        let mut headers_buf = vec![];
+        let RequestLine {
+            method,
+            path,
+            version,
+        } = headers.request_line;
+        writeln!(&mut headers_buf, "{method} {path} HTTP/1.{version}\r")?;
+        for header in headers.headers {
+            write!(&mut headers_buf, "{}: ", header.name)?;
+            headers_buf.extend(header.value);
+            writeln!(&mut headers_buf, "\r")?;
+        }
+        writeln!(&mut headers_buf, "\r")?;
+        outgoing_stream.write_all(&headers_buf).await?;
+
+        outgoing_stream
+            .write_all(&request_buf[header_size..])
+            .await?;
+    } else {
+        outgoing_stream.write_all(&request_buf[..]).await?;
+    }
+
+    Ok(())
+}
+
+trait AsyncReadWrite: AsyncRead + AsyncWrite {}
+
+impl<T: AsyncRead + AsyncWrite> AsyncReadWrite for T {}
+
+type AsyncStream = Pin<Box<dyn AsyncReadWrite + Send>>;
+
+fn wrap_ssl<S: AsyncRead + AsyncWrite>(opt: &Opt, stream: S) -> SslStream<S> {
     let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();
     connector_builder.set_verify(SslVerifyMode::NONE);
     let ssl = connector_builder
@@ -40,20 +156,38 @@ async fn handle_client(opt: &Opt, i: usize, mut incoming_stream: TcpStream) -> i
         .into_ssl(&*opt.hostname)
         .unwrap();
 
-    let outgoing_stream = TcpStream::connect((&*opt.hostname, opt.host_port)).await?;
+    SslStream::new(ssl, stream).unwrap()
+}
 
-    let mut outgoing_stream = SslStream::new(ssl, outgoing_stream).unwrap();
-    Pin::new(&mut outgoing_stream).connect().await.unwrap();
+async fn handle_client(opt: &Opt, i: usize, mut incoming_stream: TcpStream) -> Result<()> {
+    println!("[{}] === Handling connection ===", i);
+
+    let outgoing_stream = TcpStream::connect((&*opt.hostname, opt.host_port())).await?;
+    let mut outgoing_stream: AsyncStream = if opt.ssl {
+        let mut stream = wrap_ssl(opt, outgoing_stream);
+        Pin::new(&mut stream).connect().await.unwrap();
+        Box::pin(stream)
+    } else {
+        Box::pin(outgoing_stream)
+    };
+
+    if opt.rewrite_host_header {
+        handle_http(opt, i, &mut incoming_stream, &mut outgoing_stream).await?;
+    }
 
     let mut incoming_buf = vec![0; 1 << 16];
     let mut outgoing_buf = vec![0; 1 << 16];
     loop {
         tokio::select! {
             n = incoming_stream.read(&mut incoming_buf) => {
-                handle_read(opt, i, "==>", n, &incoming_buf, &mut outgoing_stream).await?;
+                let n = n?;
+                let data = &incoming_buf[..n];
+                handle_read(opt, i, "==>", &data, &mut outgoing_stream).await?;
             },
-            res = outgoing_stream.read(&mut outgoing_buf) => {
-                let n = handle_read(opt, i, "<==", res, &outgoing_buf, &mut incoming_stream).await?;
+            n = outgoing_stream.read(&mut outgoing_buf) => {
+                let n = n?;
+                let data = &outgoing_buf[..n];
+                handle_read(opt, i, "<==", &data, &mut incoming_stream).await?;
                 if n == 0 {
                     break;
                 }
@@ -61,7 +195,6 @@ async fn handle_client(opt: &Opt, i: usize, mut incoming_stream: TcpStream) -> i
         };
     }
 
-    println!();
     println!("[{}] === Done ===", i);
 
     Ok(())
@@ -71,24 +204,38 @@ async fn handle_client(opt: &Opt, i: usize, mut incoming_stream: TcpStream) -> i
 struct Opt {
     hostname: String,
 
+    #[structopt(long)]
+    ssl: bool,
+
     #[structopt(long, default_value = "7777")]
     listen_port: u16,
 
-    #[structopt(long, default_value = "443")]
-    host_port: u16,
+    #[structopt(long)]
+    host_port: Option<u16>,
 
     #[structopt(long)]
-    data: bool,
+    show_data: bool,
+
+    #[structopt(long)]
+    rewrite_host_header: bool,
+}
+
+impl Opt {
+    fn host_port(&self) -> u16 {
+        self.host_port
+            .unwrap_or_else(|| if self.ssl { 443 } else { 80 })
+    }
 }
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
+async fn main() -> Result<()> {
     let opt = Opt::from_args();
 
     let ip_str = "0.0.0.0";
     let listener = TcpListener::bind((ip_str, opt.listen_port)).await?;
 
     println!("Listening on {}:{}", ip_str, opt.listen_port);
+    println!("Forwarding to {}:{}", opt.hostname, opt.host_port());
 
     let mut i: usize = usize::MAX;
     loop {
