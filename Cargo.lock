@@ -140,18 +140,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http_to_https"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "httparse",
- "openssl",
- "structopt",
- "tokio",
- "tokio-openssl",
-]
-
-[[package]]
 name = "httparse"
 version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -428,6 +416,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tcp-proxy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "httparse",
+ "openssl",
+ "structopt",
+ "tokio",
+ "tokio-openssl",
 ]
 
 [[package]]
