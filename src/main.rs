@@ -1,8 +1,7 @@
-use anyhow::Result;
 use httparse::Error::TooManyHeaders;
 use httparse::Status::{Complete, Partial};
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
-use std::io::Write;
+use std::io::{self, Write};
 use std::pin::Pin;
 use structopt::StructOpt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -64,7 +63,7 @@ impl<'a> RequestHeaders<'a> {
 fn parse_http_request_headers(
     buffer: &[u8],
     max_headers: usize,
-) -> Result<Option<(usize, RequestHeaders)>> {
+) -> Result<Option<(usize, RequestHeaders)>, httparse::Error> {
     let mut headers = vec![httparse::EMPTY_HEADER; max_headers];
     let mut request = httparse::Request::new(&mut headers);
     match request.parse(buffer) {
@@ -75,7 +74,7 @@ fn parse_http_request_headers(
         }
         Ok(Partial) => Ok(None),
         Err(TooManyHeaders) => parse_http_request_headers(buffer, max_headers * 2),
-        Err(e) => Err(e.into()),
+        Err(e) => Err(e),
     }
 }
 
@@ -84,15 +83,23 @@ async fn handle_http(
     i: usize,
     incoming_stream: &mut TcpStream,
     outgoing_stream: &mut AsyncStream,
-) -> Result<()> {
+) -> io::Result<()> {
     let mut request_buf = vec![];
     let (header_size, mut headers) = loop {
         let n = incoming_stream.read_buf(&mut request_buf).await?;
         log_data_read_incoming(opt, i, &request_buf[request_buf.len() - n..]);
 
-        let headers = parse_http_request_headers(&request_buf, 16)?;
-        if let Some((header_size, headers)) = headers {
-            break (header_size, headers);
+        match parse_http_request_headers(&request_buf, 16) {
+            Ok(headers) => {
+                if let Some((header_size, headers)) = headers {
+                    break (header_size, headers);
+                }
+            }
+            Err(e) => {
+                println!("[{i}] Error reading HTTP header ({e}), not modifying data");
+                outgoing_stream.write_all(&request_buf).await?;
+                return Ok(());
+            }
         }
     };
 
@@ -156,7 +163,7 @@ fn wrap_ssl<S: AsyncRead + AsyncWrite>(opt: &Opt, stream: S) -> SslStream<S> {
     SslStream::new(ssl, stream).unwrap()
 }
 
-async fn handle_client(opt: &Opt, i: usize, mut incoming_stream: TcpStream) -> Result<()> {
+async fn handle_client(opt: &Opt, i: usize, mut incoming_stream: TcpStream) -> io::Result<()> {
     println!("[{}] === Handling connection ===", i);
 
     let outgoing_stream = TcpStream::connect((&*opt.hostname, opt.host_port())).await?;
@@ -229,7 +236,7 @@ impl Opt {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> io::Result<()> {
     let opt = Opt::from_args();
 
     let ip_str = "0.0.0.0";
@@ -244,7 +251,9 @@ async fn main() -> Result<()> {
         let (socket, _) = listener.accept().await?;
         let opt = opt.clone();
         tokio::spawn(async move {
-            handle_client(&opt, i, socket).await.unwrap();
+            if let Err(e) = handle_client(&opt, i, socket).await {
+                eprintln!("[{i}] Got error: {:?}", e);
+            }
         });
     }
 }
