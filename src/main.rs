@@ -2,7 +2,6 @@ use anyhow::Result;
 use httparse::Error::TooManyHeaders;
 use httparse::Status::{Complete, Partial};
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
-use std::io;
 use std::io::Write;
 use std::pin::Pin;
 use structopt::StructOpt;
@@ -10,23 +9,22 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_openssl::SslStream;
 
-async fn handle_read<W: AsyncWriteExt + std::marker::Unpin>(
-    opt: &Opt,
-    i: usize,
-    arrow: &str,
-    data_read: &[u8],
-    dst: &mut W,
-) -> io::Result<()> {
-    let n = data_read.len();
-    if !data_read.is_empty() {
-        println!("[{}] {} {} bytes", i, arrow, n);
-        if opt.show_data {
-            println!("{}", String::from_utf8_lossy(data_read));
-        }
-        dst.write_all(data_read).await?;
-    };
+fn log_data_read(opt: &Opt, i: usize, arrow: &str, data_read: &[u8]) {
+    if data_read.is_empty() {
+        return;
+    }
+    println!("[{i}] {arrow} {} bytes", data_read.len());
+    if opt.show_data {
+        println!("{}", String::from_utf8_lossy(data_read));
+    }
+}
 
-    Ok(())
+fn log_data_read_incoming(opt: &Opt, i: usize, data_read: &[u8]) {
+    log_data_read(opt, i, "==>", data_read)
+}
+
+fn log_data_read_outgoing(opt: &Opt, i: usize, data_read: &[u8]) {
+    log_data_read(opt, i, "<==", data_read)
 }
 
 struct RequestLine<'a> {
@@ -90,7 +88,7 @@ async fn handle_http(
     let mut request_buf = vec![];
     let (header_size, mut headers) = loop {
         let n = incoming_stream.read_buf(&mut request_buf).await?;
-        println!("[{}] ==> {} bytes", i, n);
+        log_data_read_incoming(opt, i, &request_buf[request_buf.len() - n..]);
 
         let headers = parse_http_request_headers(&request_buf, 16)?;
         if let Some((header_size, headers)) = headers {
@@ -98,14 +96,13 @@ async fn handle_http(
         }
     };
 
-    println!("[{}] ==> HTTP header read", i);
+    println!("[{i}] ==> HTTP header read");
 
     let mut headers_changed = false;
     for header in headers.headers.iter_mut() {
         if header.name.to_ascii_lowercase() == "host" {
             println!(
-                "[{}] Rewrote host header from {} to {}",
-                i,
+                "[{i}] Rewrote host header from {} to {}",
                 String::from_utf8_lossy(header.value),
                 opt.hostname
             );
@@ -153,7 +150,7 @@ fn wrap_ssl<S: AsyncRead + AsyncWrite>(opt: &Opt, stream: S) -> SslStream<S> {
         .build()
         .configure()
         .unwrap()
-        .into_ssl(&*opt.hostname)
+        .into_ssl(&opt.hostname)
         .unwrap();
 
     SslStream::new(ssl, stream).unwrap()
@@ -182,12 +179,17 @@ async fn handle_client(opt: &Opt, i: usize, mut incoming_stream: TcpStream) -> R
             n = incoming_stream.read(&mut incoming_buf) => {
                 let n = n?;
                 let data = &incoming_buf[..n];
-                handle_read(opt, i, "==>", &data, &mut outgoing_stream).await?;
-            },
+                log_data_read_incoming(opt, i, data);
+                outgoing_stream.write_all(data).await?;
+                if n == 0 {
+                    break;
+                }
+            }
             n = outgoing_stream.read(&mut outgoing_buf) => {
                 let n = n?;
                 let data = &outgoing_buf[..n];
-                handle_read(opt, i, "<==", &data, &mut incoming_stream).await?;
+                log_data_read_outgoing(opt, i, data);
+                incoming_stream.write_all(data).await?;
                 if n == 0 {
                     break;
                 }
@@ -222,8 +224,7 @@ struct Opt {
 
 impl Opt {
     fn host_port(&self) -> u16 {
-        self.host_port
-            .unwrap_or_else(|| if self.ssl { 443 } else { 80 })
+        self.host_port.unwrap_or(if self.ssl { 443 } else { 80 })
     }
 }
 
