@@ -81,7 +81,7 @@ fn parse_http_request_headers(
 async fn handle_http(
     opt: &Opt,
     i: usize,
-    incoming_stream: &mut TcpStream,
+    incoming_stream: &mut AsyncStream,
     outgoing_stream: &mut AsyncStream,
 ) -> io::Result<()> {
     let mut request_buf = vec![];
@@ -163,7 +163,7 @@ fn wrap_ssl<S: AsyncRead + AsyncWrite>(opt: &Opt, stream: S) -> SslStream<S> {
     SslStream::new(ssl, stream).unwrap()
 }
 
-async fn handle_client(opt: &Opt, i: usize, mut incoming_stream: TcpStream) -> io::Result<()> {
+async fn handle_client(opt: &Opt, i: usize, incoming_stream: TcpStream) -> io::Result<()> {
     println!("[{}] === Handling connection ===", i);
 
     let outgoing_stream = TcpStream::connect((&*opt.hostname, opt.host_port())).await?;
@@ -173,6 +173,14 @@ async fn handle_client(opt: &Opt, i: usize, mut incoming_stream: TcpStream) -> i
         Box::pin(stream)
     } else {
         Box::pin(outgoing_stream)
+    };
+
+    let mut incoming_stream: AsyncStream = if opt.ssl_server {
+        let mut stream = wrap_ssl(opt, incoming_stream);
+        Pin::new(&mut stream).accept().await.unwrap();
+        Box::pin(stream)
+    } else {
+        Box::pin(incoming_stream)
     };
 
     if opt.rewrite_host_header {
@@ -215,6 +223,9 @@ struct Opt {
 
     #[structopt(long)]
     ssl: bool,
+
+    #[structopt(long)]
+    ssl_server: bool,
 
     #[structopt(long, default_value = "7777")]
     listen_port: u16,
