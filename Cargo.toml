@@ -11,3 +11,6 @@ tokio-openssl = "*"
 openssl = "*"
 structopt = "*"
 httparse = "*"
+rcgen = "*"
+tempfile = "*"
+anyhow = { version = "*", features = ["backtrace"] }
