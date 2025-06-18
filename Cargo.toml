@@ -7,10 +7,17 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-tokio-openssl = "*"
-openssl = "*"
+tokio-openssl = { version = "*", optional = true }
+openssl = { version = "*", optional = true }
 structopt = "*"
 httparse = "*"
-rcgen = "*"
+rcgen = { version = "*", optional = true }
 tempfile = "*"
 anyhow = { version = "*", features = ["backtrace"] }
+
+[features]
+ssl = [
+	"dep:tokio-openssl",
+	"dep:openssl",
+	"dep:rcgen",
+]

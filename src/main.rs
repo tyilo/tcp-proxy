@@ -1,17 +1,15 @@
+#[cfg(feature = "ssl")]
+mod ssl;
+
 use anyhow::Result;
 use httparse::Error::TooManyHeaders;
 use httparse::Status::{Complete, Partial};
-use openssl::pkey::PKey;
-use openssl::ssl::{Ssl, SslAcceptor, SslConnector, SslMethod, SslVerifyMode};
-use openssl::x509::X509;
-use rcgen::generate_simple_self_signed;
 use std::io::Write;
 use std::pin::Pin;
 use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_openssl::SslStream;
 
 fn log_data_read(opt: &Opt, i: usize, arrow: &str, data_read: &[u8]) {
     if data_read.is_empty() {
@@ -155,49 +153,38 @@ impl<T: AsyncRead + AsyncWrite> AsyncReadWrite for T {}
 
 type AsyncStream = Pin<Box<dyn AsyncReadWrite + Send>>;
 
-fn wrap_ssl_client<S: AsyncRead + AsyncWrite>(opt: &Opt, stream: S) -> SslStream<S> {
-    let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();
-    connector_builder.set_verify(SslVerifyMode::NONE);
-    let ssl = connector_builder
-        .build()
-        .configure()
-        .unwrap()
-        .into_ssl(&opt.hostname)
-        .unwrap();
-
-    SslStream::new(ssl, stream).unwrap()
-}
-
-fn wrap_ssl_server<S: AsyncRead + AsyncWrite>(stream: S, acceptor: &SslAcceptor) -> SslStream<S> {
-    let ssl = Ssl::new(acceptor.context()).unwrap();
-    SslStream::new(ssl, stream).unwrap()
-}
-
 async fn handle_client(
     opt: &Opt,
     i: usize,
     incoming_stream: TcpStream,
-    ssl_acceptor: Option<Arc<SslAcceptor>>,
+    #[cfg(feature = "ssl")] ssl_acceptor: Option<Arc<openssl::ssl::SslAcceptor>>,
 ) -> Result<()> {
     println!("[{}] === Handling connection ===", i);
 
     let outgoing_stream = TcpStream::connect((&*opt.hostname, opt.host_port())).await?;
+
+    #[cfg(feature = "ssl")]
     let mut outgoing_stream: AsyncStream = if opt.ssl {
-        let mut stream = wrap_ssl_client(opt, outgoing_stream);
+        let mut stream = ssl::wrap_ssl_client(opt, outgoing_stream);
         Pin::new(&mut stream).connect().await.unwrap();
         Box::pin(stream)
     } else {
         Box::pin(outgoing_stream)
     };
+    #[cfg(not(feature = "ssl"))]
+    let mut outgoing_stream: AsyncStream = Box::pin(outgoing_stream);
 
+    #[cfg(feature = "ssl")]
     let mut incoming_stream: AsyncStream = match ssl_acceptor {
         Some(ssl_acceptor) => {
-            let mut stream = wrap_ssl_server(incoming_stream, &ssl_acceptor);
+            let mut stream = ssl::wrap_ssl_server(incoming_stream, &ssl_acceptor);
             Pin::new(&mut stream).accept().await?;
             Box::pin(stream)
         }
         None => Box::pin(incoming_stream),
     };
+    #[cfg(not(feature = "ssl"))]
+    let mut incoming_stream: AsyncStream = Box::pin(incoming_stream);
 
     if opt.rewrite_host_header {
         handle_http(opt, i, &mut incoming_stream, &mut outgoing_stream).await?;
@@ -233,29 +220,15 @@ async fn handle_client(
     Ok(())
 }
 
-fn generate_acceptor() -> SslAcceptor {
-    let cert = generate_simple_self_signed(vec![]).unwrap();
-
-    let private_key =
-        PKey::private_key_from_pem(cert.serialize_private_key_pem().as_bytes()).unwrap();
-    let certificate = X509::from_pem(cert.serialize_pem().unwrap().as_bytes()).unwrap();
-
-    let mut acceptor_builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
-    acceptor_builder.set_private_key(&private_key).unwrap();
-    acceptor_builder.set_certificate(&certificate).unwrap();
-
-    acceptor_builder.check_private_key().unwrap();
-
-    acceptor_builder.build()
-}
-
 #[derive(StructOpt)]
 struct Opt {
     hostname: String,
 
+    #[cfg(feature = "ssl")]
     #[structopt(long)]
     ssl: bool,
 
+    #[cfg(feature = "ssl")]
     #[structopt(long)]
     ssl_server: bool,
 
@@ -274,7 +247,16 @@ struct Opt {
 
 impl Opt {
     fn host_port(&self) -> u16 {
-        self.host_port.unwrap_or(if self.ssl { 443 } else { 80 })
+        self.host_port.unwrap_or({
+            #[cfg(feature = "ssl")]
+            if self.ssl {
+                443
+            } else {
+                80
+            }
+            #[cfg(not(feature = "ssl"))]
+            80
+        })
     }
 }
 
@@ -285,8 +267,9 @@ async fn main() -> Result<()> {
     let ip_str = "0.0.0.0";
     let listener = TcpListener::bind((ip_str, opt.listen_port)).await?;
 
+    #[cfg(feature = "ssl")]
     let ssl_acceptor = if opt.ssl_server {
-        Some(Arc::new(generate_acceptor()))
+        Some(Arc::new(ssl::generate_acceptor()))
     } else {
         None
     };
@@ -299,9 +282,20 @@ async fn main() -> Result<()> {
         i = i.wrapping_add(1);
         let (socket, _) = listener.accept().await?;
         let opt = opt.clone();
+
+        #[cfg(feature = "ssl")]
         let ssl_acceptor = ssl_acceptor.clone();
+
         tokio::spawn(async move {
-            if let Err(e) = handle_client(&opt, i, socket, ssl_acceptor).await {
+            if let Err(e) = handle_client(
+                &opt,
+                i,
+                socket,
+                #[cfg(feature = "ssl")]
+                ssl_acceptor,
+            )
+            .await
+            {
                 eprintln!("[{i}] Got error: {:?}", e);
             }
         });
