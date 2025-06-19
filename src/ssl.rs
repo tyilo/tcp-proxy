@@ -7,16 +7,16 @@ use rcgen::{CertifiedKey, generate_simple_self_signed};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_openssl::SslStream;
 
-use crate::Opt;
+use crate::Args;
 
-pub(crate) fn wrap_ssl_client<S: AsyncRead + AsyncWrite>(opt: &Opt, stream: S) -> SslStream<S> {
+pub(crate) fn wrap_ssl_client<S: AsyncRead + AsyncWrite>(args: &Args, stream: S) -> SslStream<S> {
     let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();
     connector_builder.set_verify(SslVerifyMode::NONE);
     let ssl = connector_builder
         .build()
         .configure()
         .unwrap()
-        .into_ssl(&opt.hostname)
+        .into_ssl(&args.hostname)
         .unwrap();
 
     SslStream::new(ssl, stream).unwrap()

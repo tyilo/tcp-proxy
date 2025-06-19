@@ -9,11 +9,11 @@ edition = "2024"
 tokio = { version = "1", features = ["full"] }
 tokio-openssl = { version = "*", optional = true }
 openssl = { version = "*", optional = true }
-structopt = "*"
 httparse = "*"
 rcgen = { version = "*", optional = true }
 tempfile = "*"
 anyhow = { version = "*", features = ["backtrace"] }
+clap = { version = "4.5.40", features = ["derive"] }
 
 [features]
 ssl = [
