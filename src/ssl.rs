@@ -1,4 +1,3 @@
-use rcgen::{CertifiedKey, generate_simple_self_signed};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_native_tls::{
     TlsAcceptor, TlsConnector, TlsStream,
@@ -32,7 +31,11 @@ pub(crate) async fn wrap_ssl_server<S: AsyncRead + AsyncWrite + Unpin>(
 }
 
 pub(crate) fn generate_acceptor() -> TlsAcceptor {
-    let CertifiedKey { cert, key_pair } = generate_simple_self_signed(vec![]).unwrap();
+    let key_pair = rcgen::KeyPair::generate_for(&rcgen::PKCS_RSA_SHA256).unwrap();
+    let cert = rcgen::CertificateParams::new(vec![])
+        .unwrap()
+        .self_signed(&key_pair)
+        .unwrap();
 
     let identity =
         Identity::from_pkcs8(cert.pem().as_bytes(), key_pair.serialize_pem().as_bytes()).unwrap();

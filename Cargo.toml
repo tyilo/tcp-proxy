@@ -8,7 +8,7 @@ edition = "2024"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 httparse = "*"
-rcgen = "*"
+rcgen = { version = "*", default-features = false, features = ["pem", "crypto", "aws_lc_rs"] }
 tempfile = "*"
 anyhow = { version = "*", features = ["backtrace"] }
 clap = { version = "4.5.40", features = ["derive"] }
