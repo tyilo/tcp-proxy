@@ -1,11 +1,13 @@
-use openssl::pkey::PKey;
-use openssl::ssl::{Ssl, SslAcceptor, SslConnector, SslMethod, SslVerifyMode};
-use openssl::x509::X509;
-
-use crate::Opt;
+use openssl::{
+    pkey::PKey,
+    ssl::{Ssl, SslAcceptor, SslConnector, SslMethod, SslVerifyMode},
+    x509::X509,
+};
 use rcgen::{CertifiedKey, generate_simple_self_signed};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_openssl::SslStream;
+
+use crate::Opt;
 
 pub(crate) fn wrap_ssl_client<S: AsyncRead + AsyncWrite>(opt: &Opt, stream: S) -> SslStream<S> {
     let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();

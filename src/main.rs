@@ -1,15 +1,18 @@
 #[cfg(feature = "ssl")]
 mod ssl;
 
+use std::{io::Write, pin::Pin, sync::Arc};
+
 use anyhow::Result;
-use httparse::Error::TooManyHeaders;
-use httparse::Status::{Complete, Partial};
-use std::io::Write;
-use std::pin::Pin;
-use std::sync::Arc;
+use httparse::{
+    Error::TooManyHeaders,
+    Status::{Complete, Partial},
+};
 use structopt::StructOpt;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+};
 
 fn log_data_read(opt: &Opt, i: usize, arrow: &str, data_read: &[u8]) {
     if data_read.is_empty() {
