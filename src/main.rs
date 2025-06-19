@@ -110,7 +110,7 @@ async fn handle_http(
 
     let mut headers_changed = false;
     for header in headers.headers.iter_mut() {
-        if header.name.to_ascii_lowercase() == "host" {
+        if header.name.eq_ignore_ascii_case("host") {
             println!(
                 "[{i}] Rewrote host header from {} to {}",
                 String::from_utf8_lossy(header.value),
