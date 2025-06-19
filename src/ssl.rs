@@ -3,7 +3,7 @@ use openssl::ssl::{Ssl, SslAcceptor, SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 
 use crate::Opt;
-use rcgen::generate_simple_self_signed;
+use rcgen::{CertifiedKey, generate_simple_self_signed};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_openssl::SslStream;
 
@@ -29,11 +29,10 @@ pub(crate) fn wrap_ssl_server<S: AsyncRead + AsyncWrite>(
 }
 
 pub(crate) fn generate_acceptor() -> SslAcceptor {
-    let cert = generate_simple_self_signed(vec![]).unwrap();
+    let CertifiedKey { cert, key_pair } = generate_simple_self_signed(vec![]).unwrap();
 
-    let private_key =
-        PKey::private_key_from_pem(cert.serialize_private_key_pem().as_bytes()).unwrap();
-    let certificate = X509::from_pem(cert.serialize_pem().unwrap().as_bytes()).unwrap();
+    let private_key = PKey::private_key_from_der(key_pair.serialized_der()).unwrap();
+    let certificate = X509::from_der(cert.der()).unwrap();
 
     let mut acceptor_builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
     acceptor_builder.set_private_key(&private_key).unwrap();
