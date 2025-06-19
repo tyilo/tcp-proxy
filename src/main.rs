@@ -239,8 +239,7 @@ struct Args {
 
 impl Args {
     fn host_port(&self) -> u16 {
-        self.host_port
-            .unwrap_or({ if self.ssl { 443 } else { 80 } })
+        self.host_port.unwrap_or(if self.ssl { 443 } else { 80 })
     }
 }
 
