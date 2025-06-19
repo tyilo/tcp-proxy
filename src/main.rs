@@ -160,7 +160,7 @@ async fn handle_client(
     args: &Args,
     i: usize,
     incoming_stream: TcpStream,
-    #[cfg(feature = "ssl")] ssl_acceptor: Option<Arc<openssl::ssl::SslAcceptor>>,
+    #[cfg(feature = "ssl")] ssl_acceptor: Option<Arc<ssl::Acceptor>>,
 ) -> Result<()> {
     println!("[{}] === Handling connection ===", i);
 
@@ -168,8 +168,7 @@ async fn handle_client(
 
     #[cfg(feature = "ssl")]
     let mut outgoing_stream: AsyncStream = if args.ssl {
-        let mut stream = ssl::wrap_ssl_client(args, outgoing_stream);
-        Pin::new(&mut stream).connect().await.unwrap();
+        let stream = ssl::wrap_ssl_client(args, outgoing_stream).await;
         Box::pin(stream)
     } else {
         Box::pin(outgoing_stream)
@@ -180,8 +179,7 @@ async fn handle_client(
     #[cfg(feature = "ssl")]
     let mut incoming_stream: AsyncStream = match ssl_acceptor {
         Some(ssl_acceptor) => {
-            let mut stream = ssl::wrap_ssl_server(incoming_stream, &ssl_acceptor);
-            Pin::new(&mut stream).accept().await?;
+            let stream = ssl::wrap_ssl_server(incoming_stream, &ssl_acceptor).await;
             Box::pin(stream)
         }
         None => Box::pin(incoming_stream),
