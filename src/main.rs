@@ -166,7 +166,7 @@ async fn handle_client(
     let outgoing_stream = TcpStream::connect((&*args.hostname, args.host_port())).await?;
 
     let mut outgoing_stream: AsyncStream = if args.ssl {
-        let stream = ssl::wrap_ssl_client(args, outgoing_stream).await;
+        let stream = ssl::wrap_ssl_client(args, outgoing_stream).await?;
         Box::pin(stream)
     } else {
         Box::pin(outgoing_stream)
@@ -174,7 +174,7 @@ async fn handle_client(
 
     let mut incoming_stream: AsyncStream = match ssl_acceptor {
         Some(ssl_acceptor) => {
-            let stream = ssl::wrap_ssl_server(incoming_stream, &ssl_acceptor).await;
+            let stream = ssl::wrap_ssl_server(incoming_stream, &ssl_acceptor).await?;
             Box::pin(stream)
         }
         None => Box::pin(incoming_stream),
@@ -239,13 +239,8 @@ struct Args {
 
 impl Args {
     fn host_port(&self) -> u16 {
-        self.host_port.unwrap_or({
-            if self.ssl {
-                443
-            } else {
-                80
-            }
-        })
+        self.host_port
+            .unwrap_or({ if self.ssl { 443 } else { 80 } })
     }
 }
 
@@ -274,14 +269,7 @@ async fn main() -> Result<()> {
         let ssl_acceptor = ssl_acceptor.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = handle_client(
-                &args,
-                i,
-                socket,
-                ssl_acceptor,
-            )
-            .await
-            {
+            if let Err(e) = handle_client(&args, i, socket, ssl_acceptor).await {
                 eprintln!("[{i}] Got error: {:?}", e);
             }
         });

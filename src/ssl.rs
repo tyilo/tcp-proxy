@@ -5,14 +5,14 @@ use tokio_native_tls::{
     native_tls::{self, Identity},
 };
 
-use crate::Args;
+use crate::{Args, Result};
 
 pub type Acceptor = TlsAcceptor;
 
 pub(crate) async fn wrap_ssl_client<S: AsyncRead + AsyncWrite + Unpin>(
     args: &Args,
     stream: S,
-) -> TlsStream<S> {
+) -> Result<TlsStream<S>> {
     let connector: TlsConnector = native_tls::TlsConnector::builder()
         .danger_accept_invalid_certs(true)
         .danger_accept_invalid_hostnames(true)
@@ -20,14 +20,14 @@ pub(crate) async fn wrap_ssl_client<S: AsyncRead + AsyncWrite + Unpin>(
         .unwrap()
         .into();
 
-    connector.connect(&args.hostname, stream).await.unwrap()
+    Ok(connector.connect(&args.hostname, stream).await?)
 }
 
 pub(crate) async fn wrap_ssl_server<S: AsyncRead + AsyncWrite + Unpin>(
     stream: S,
     acceptor: &TlsAcceptor,
-) -> TlsStream<S> {
-    acceptor.accept(stream).await.unwrap()
+) -> Result<TlsStream<S>> {
+    Ok(acceptor.accept(stream).await?)
 }
 
 pub(crate) fn generate_acceptor() -> TlsAcceptor {
