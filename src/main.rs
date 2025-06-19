@@ -1,4 +1,3 @@
-#[cfg(feature = "ssl")]
 mod ssl;
 
 use std::{io::Write, pin::Pin, sync::Arc};
@@ -160,23 +159,19 @@ async fn handle_client(
     args: &Args,
     i: usize,
     incoming_stream: TcpStream,
-    #[cfg(feature = "ssl")] ssl_acceptor: Option<Arc<ssl::Acceptor>>,
+    ssl_acceptor: Option<Arc<ssl::Acceptor>>,
 ) -> Result<()> {
     println!("[{}] === Handling connection ===", i);
 
     let outgoing_stream = TcpStream::connect((&*args.hostname, args.host_port())).await?;
 
-    #[cfg(feature = "ssl")]
     let mut outgoing_stream: AsyncStream = if args.ssl {
         let stream = ssl::wrap_ssl_client(args, outgoing_stream).await;
         Box::pin(stream)
     } else {
         Box::pin(outgoing_stream)
     };
-    #[cfg(not(feature = "ssl"))]
-    let mut outgoing_stream: AsyncStream = Box::pin(outgoing_stream);
 
-    #[cfg(feature = "ssl")]
     let mut incoming_stream: AsyncStream = match ssl_acceptor {
         Some(ssl_acceptor) => {
             let stream = ssl::wrap_ssl_server(incoming_stream, &ssl_acceptor).await;
@@ -184,8 +179,6 @@ async fn handle_client(
         }
         None => Box::pin(incoming_stream),
     };
-    #[cfg(not(feature = "ssl"))]
-    let mut incoming_stream: AsyncStream = Box::pin(incoming_stream);
 
     if args.rewrite_host_header {
         handle_http(args, i, &mut incoming_stream, &mut outgoing_stream).await?;
@@ -225,11 +218,9 @@ async fn handle_client(
 struct Args {
     hostname: String,
 
-    #[cfg(feature = "ssl")]
     #[arg(long)]
     ssl: bool,
 
-    #[cfg(feature = "ssl")]
     #[arg(long)]
     ssl_server: bool,
 
@@ -249,14 +240,11 @@ struct Args {
 impl Args {
     fn host_port(&self) -> u16 {
         self.host_port.unwrap_or({
-            #[cfg(feature = "ssl")]
             if self.ssl {
                 443
             } else {
                 80
             }
-            #[cfg(not(feature = "ssl"))]
-            80
         })
     }
 }
@@ -268,7 +256,6 @@ async fn main() -> Result<()> {
     let ip_str = "0.0.0.0";
     let listener = TcpListener::bind((ip_str, args.listen_port)).await?;
 
-    #[cfg(feature = "ssl")]
     let ssl_acceptor = if args.ssl_server {
         Some(Arc::new(ssl::generate_acceptor()))
     } else {
@@ -284,7 +271,6 @@ async fn main() -> Result<()> {
         let (socket, _) = listener.accept().await?;
         let args = args.clone();
 
-        #[cfg(feature = "ssl")]
         let ssl_acceptor = ssl_acceptor.clone();
 
         tokio::spawn(async move {
@@ -292,7 +278,6 @@ async fn main() -> Result<()> {
                 &args,
                 i,
                 socket,
-                #[cfg(feature = "ssl")]
                 ssl_acceptor,
             )
             .await

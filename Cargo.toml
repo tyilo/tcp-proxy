@@ -8,14 +8,8 @@ edition = "2024"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 httparse = "*"
-rcgen = { version = "*", optional = true }
+rcgen = "*"
 tempfile = "*"
 anyhow = { version = "*", features = ["backtrace"] }
 clap = { version = "4.5.40", features = ["derive"] }
-tokio-native-tls = { version = "0.3.1", optional = true }
-
-[features]
-ssl = [
-	"dep:tokio-native-tls",
-	"dep:rcgen",
-]
+tokio-native-tls = "0.3.1"
