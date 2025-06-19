@@ -16,6 +16,7 @@ pub(crate) async fn wrap_ssl_client<S: AsyncRead + AsyncWrite + Unpin>(
     let connector: TlsConnector = native_tls::TlsConnector::builder()
         .danger_accept_invalid_certs(true)
         .danger_accept_invalid_hostnames(true)
+        .min_protocol_version(None)
         .build()
         .unwrap()
         .into();
@@ -36,6 +37,9 @@ pub(crate) fn generate_acceptor() -> TlsAcceptor {
     let identity =
         Identity::from_pkcs8(cert.pem().as_bytes(), key_pair.serialize_pem().as_bytes()).unwrap();
 
-    let acceptor = native_tls::TlsAcceptor::new(identity).unwrap();
+    let acceptor = native_tls::TlsAcceptor::builder(identity)
+        .min_protocol_version(None)
+        .build()
+        .unwrap();
     acceptor.into()
 }
